@@ -18,7 +18,6 @@ button{font:inherit;cursor:pointer}
 main{max-width:760px;margin:0 auto;padding:16px}
 .card{background:var(--blanco);border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 1px 3px #0001}
 .card h2{margin:0 0 6px;font-size:1.2rem}
-.card h3{margin:16px 0 4px;font-size:1rem;border-bottom:2px solid var(--rojo);padding-bottom:4px}
 .muted{color:#666;font-size:.9rem;margin:4px 0}
 
 /* grilla de áreas */
@@ -33,8 +32,6 @@ main{max-width:760px;margin:0 auto;padding:16px}
 /* detalle de área */
 .volver{background:#e6e6e6;border:0;border-radius:8px;padding:8px 12px;margin-bottom:12px;font-weight:600}
 .referente{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;background:#fafafa;border-radius:10px;padding:12px;border-left:5px solid var(--rojo)}
-.fila-col{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px dashed #ddd;flex-wrap:wrap}
-.horario{font-weight:700;color:var(--negro);white-space:nowrap}
 .acciones{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 a.wa{background:var(--verde);color:#fff;text-decoration:none;border-radius:8px;padding:6px 10px;font-size:.85rem;font-weight:600;white-space:nowrap}
 button.peligro{background:#fff;color:var(--rojo);border:1px solid var(--rojo);border-radius:8px;padding:5px 9px;font-size:.8rem}
@@ -45,6 +42,19 @@ input,select{padding:9px;border:1px solid #bbb;border-radius:8px;font-size:1rem;
 .anotar{background:#fff5f6;border-radius:10px;padding:12px;margin-top:16px}
 .gestion{background:#f6f6f6;border-radius:10px;padding:12px;margin-top:16px}
 .vacio{text-align:center;color:#777;padding:30px 0}
+
+/* agenda por día */
+.dia{margin-top:18px}
+.dia-titulo{background:var(--negro);color:#fff;border-radius:8px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.dia-titulo strong{font-size:1rem}
+.dia-titulo span{font-size:.9rem;color:#ddd}
+.franja{display:grid;grid-template-columns:118px 1fr;gap:10px;padding:10px 8px;border-bottom:1px solid #eee;align-items:center}
+.franja .hora{font-weight:700;font-size:.95rem;white-space:nowrap}
+.franja.falta{background:#fff0f1;color:var(--rojo);border-left:4px solid var(--rojo)}
+.franja.falta .hora{color:var(--rojo)}
+.personas{display:flex;flex-wrap:wrap;gap:8px}
+.persona{display:flex;align-items:center;gap:6px;background:#fafafa;border:1px solid #ddd;border-radius:10px;padding:4px 6px 4px 10px}
+.persona .nombre{font-weight:600}
 </style>
 </head>
 <body>
@@ -115,6 +125,8 @@ function colaboradoresDe(areaId) {
   return datos.colaboradores.filter(c => c.areaId === areaId);
 }
 
+const aMin = hhmm => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; };
+
 // "2293 555555" o "02293-15 555555" -> 549 + área + número (formato wa.me)
 function numeroWA(tel) {
   let d = String(tel).replace(/\D/g, '');
@@ -184,7 +196,6 @@ async function soyReferente() {
 function editarArea(e, areaId) {
   e.preventDefault();
   const f = e.target;
-  const a = datos.areas.find(x => x.id === areaId);
   ejecutar(() => api('editarArea', {
     areaId,
     emoji: f.emoji.value.trim() || '📍',
@@ -272,29 +283,66 @@ function vistaGrilla() {
     : '<div class="vacio">Todavía no hay áreas cargadas.</div>');
 }
 
-// Pantalla de un área: referente arriba, colaboradores con su horario abajo
+// Una persona en la agenda: nombre, WhatsApp y quitar/darse de baja
+function chipPersona(c, a, d, gestiona) {
+  const msg = `Hola ${c.nombre}! Te escribo por la agenda del Encuentro: ${a.nombre}, ${d.label} de ${c.desde} a ${c.hasta}.`;
+  return `
+    <div class="persona">
+      <span class="nombre">${esc(c.nombre)}</span>
+      <a class="wa" target="_blank" rel="noopener" href="${esc(linkWA(c.tel, msg))}">WhatsApp</a>
+      <button class="peligro" onclick="quitar('${c.id}')">${gestiona ? 'Quitar' : 'Darme de baja'}</button>
+    </div>`;
+}
+
+// Agenda de un día: se recorre en franjas de 30 minutos y se agrupan las franjas
+// consecutivas que tienen la misma gente, así cada fila muestra un rango de horas.
+function agendaDia(a, d, cols, gestiona) {
+  const ini = aMin(d.desde), fin = aMin(d.hasta);
+  const delDia = cols
+    .filter(c => c.dia === d.id)
+    .map(c => ({ ...c, ini: aMin(c.desde), fin: aMin(c.hasta) }));
+
+  const grupos = [];
+  for (let m = ini; m < fin; m += 30) {
+    const ids = delDia.filter(c => c.ini <= m && c.fin > m).map(c => c.id).sort();
+    const key = ids.join('|');
+    const ult = grupos[grupos.length - 1];
+    if (ult && ult.key === key && ult.hasta === m) {
+      ult.hasta = m + 30;
+    } else {
+      grupos.push({ key, ids, desde: m, hasta: m + 30 });
+    }
+  }
+
+  const filas = grupos.map(g => {
+    const rango = `${hhmm(g.desde)} a ${hhmm(g.hasta)}`;
+    if (!g.ids.length) {
+      return `<div class="franja falta"><span class="hora">${rango}</span><span>Falta cubrir</span></div>`;
+    }
+    const personas = delDia
+      .filter(c => g.ids.includes(c.id))
+      .sort((x, y) => x.nombre.localeCompare(y.nombre))
+      .map(c => chipPersona(c, a, d, gestiona))
+      .join('');
+    return `<div class="franja"><span class="hora">${rango}</span><div class="personas">${personas}</div></div>`;
+  }).join('');
+
+  return `
+    <div class="dia">
+      <div class="dia-titulo"><strong>${d.label}</strong><span>Cubrir de ${d.desde} a ${d.hasta}</span></div>
+      ${filas}
+    </div>`;
+}
+
+const hhmm = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+
+// Pantalla de un área: referente arriba, agenda por día abajo
 function vistaArea(a) {
   const cols = colaboradoresDe(a.id);
   const gestiona = puedeGestionar(a.id);
   const msgRef = `Hola ${a.referenteNombre}! Te escribo por la agenda del Encuentro, área ${a.nombre}.`;
 
-  const bloques = DIAS.map(d => {
-    const items = cols
-      .filter(c => c.dia === d.id)
-      .sort((x, y) => x.desde.localeCompare(y.desde));
-    const lista = items.length
-      ? items.map(c => `
-          <div class="fila-col">
-            <span><span class="horario">${esc(c.desde)} a ${esc(c.hasta)}</span> · ${esc(c.nombre)}</span>
-            <span class="acciones">
-              <a class="wa" target="_blank" rel="noopener"
-                 href="${esc(linkWA(c.tel, `Hola ${c.nombre}! Te escribo por la agenda del Encuentro: ${a.nombre}, ${d.label} de ${c.desde} a ${c.hasta}.`))}">WhatsApp</a>
-              <button class="peligro" onclick="quitar('${c.id}')">${gestiona ? 'Quitar' : 'Darme de baja'}</button>
-            </span>
-          </div>`).join('')
-      : `<p class="muted">Nadie anotado todavía.</p>`;
-    return `<h3>${d.label} · ${d.desde} a ${d.hasta}</h3>${lista}`;
-  }).join('');
+  const agenda = DIAS.map(d => agendaDia(a, d, cols, gestiona)).join('');
 
   const formAnotar = `
     <div class="anotar">
@@ -344,7 +392,7 @@ function vistaArea(a) {
         <div><span class="muted">Referente</span><br><strong>${esc(a.referenteNombre)}</strong></div>
         <a class="wa" target="_blank" rel="noopener" href="${esc(linkWA(a.referenteTel, msgRef))}">WhatsApp al referente</a>
       </div>
-      ${bloques}
+      ${agenda}
       ${formAnotar}
       ${gestion}
       ${botonReferente}
