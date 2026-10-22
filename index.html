@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agenda de turnos - XXI Encuentro Nacional</title>
+<style>
+:root{--rojo:#c8102e;--negro:#1a1a1a;--gris:#f3f3f3;--blanco:#fff;--verde:#25d366}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--gris);color:var(--negro)}
+header{background:var(--negro);color:#fff;padding:14px 16px;border-bottom:4px solid var(--rojo)}
+header h1{margin:0;font-size:1.3rem}
+header p{margin:4px 0 0;color:#ccc;font-size:.9rem}
+.barra-sup{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 16px;background:var(--blanco);position:sticky;top:0;z-index:1;box-shadow:0 1px 3px #0002}
+button{font:inherit;cursor:pointer}
+.barra-sup button{padding:9px 14px;border:0;border-radius:8px;background:#e6e6e6;font-weight:600}
+.barra-sup button.activo{background:var(--rojo);color:#fff}
+main{max-width:760px;margin:0 auto;padding:16px}
+.card{background:var(--blanco);border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 1px 3px #0001}
+.card h2{margin:0 0 6px;font-size:1.2rem}
+.card h3{margin:16px 0 4px;font-size:1rem;border-bottom:2px solid var(--rojo);padding-bottom:4px}
+.muted{color:#666;font-size:.9rem;margin:4px 0}
+
+/* grilla de áreas */
+.grilla{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.cuadro{background:var(--blanco);border:2px solid var(--negro);border-top:6px solid var(--rojo);border-radius:12px;padding:14px 10px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px;box-shadow:0 1px 3px #0001}
+.cuadro:hover{border-color:var(--rojo)}
+.cuadro .emo{font-size:2.2rem;line-height:1}
+.cuadro strong{font-size:1rem}
+.cuadro .ref{font-size:.8rem;color:#555}
+.cuadro .cuenta{font-size:.75rem;background:var(--rojo);color:#fff;border-radius:99px;padding:2px 8px}
+
+/* detalle de área */
+.volver{background:#e6e6e6;border:0;border-radius:8px;padding:8px 12px;margin-bottom:12px;font-weight:600}
+.referente{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;background:#fafafa;border-radius:10px;padding:12px;border-left:5px solid var(--rojo)}
+.fila-col{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px dashed #ddd;flex-wrap:wrap}
+.horario{font-weight:700;color:var(--negro);white-space:nowrap}
+.acciones{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+a.wa{background:var(--verde);color:#fff;text-decoration:none;border-radius:8px;padding:6px 10px;font-size:.85rem;font-weight:600;white-space:nowrap}
+button.peligro{background:#fff;color:var(--rojo);border:1px solid var(--rojo);border-radius:8px;padding:5px 9px;font-size:.8rem}
+button.primario{background:var(--rojo);color:#fff;border:0;border-radius:8px;padding:9px 14px;font-weight:600}
+button.secundario{background:#e6e6e6;border:0;border-radius:8px;padding:8px 12px;font-weight:600}
+form.fila{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+input,select{padding:9px;border:1px solid #bbb;border-radius:8px;font-size:1rem;font:inherit;flex:1;min-width:110px;background:#fff}
+.anotar{background:#fff5f6;border-radius:10px;padding:12px;margin-top:16px}
+.gestion{background:#f6f6f6;border-radius:10px;padding:12px;margin-top:16px}
+.vacio{text-align:center;color:#777;padding:30px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>Agenda de turnos</h1>
+  <p>XXI Encuentro Nacional de Mini Básquet</p>
+</header>
+<div class="barra-sup">
+  <span id="titulo" class="muted" style="margin:0"></span>
+  <button id="btnAdmin" onclick="toggleAdmin()">Modo coordinador</button>
+</div>
+<main id="main"><div class="vacio">Cargando…</div></main>
+
+<script>
+// Pegar acá la URL del Web App de Apps Script (termina en /exec)
+const API = 'PEGAR_AQUI_LA_URL_DEL_APPS_SCRIPT';
+
+// Franjas de cada día (deben coincidir con VENTANAS en Code.gs)
+const DIAS = [
+  { id: 'viernes', label: 'Viernes', desde: '18:00', hasta: '20:30' },
+  { id: 'sabado',  label: 'Sábado',  desde: '08:30', hasta: '18:30' },
+  { id: 'domingo', label: 'Domingo', desde: '08:30', hasta: '14:00' }
+];
+
+let datos = { areas: [], colaboradores: [] };
+let areaActiva = null;   // id del área abierta, o null para la grilla
+let esAdmin = false;     // coordinador (PIN)
+let pin = '';
+let claves = {};         // claves de referente desbloqueadas en esta sesión, por área
+
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ---------- backend ---------- */
+
+async function cargar() {
+  const r = await fetch(API);
+  datos = await r.json();
+  if (datos.error) throw new Error(datos.error);
+  render();
+}
+
+// Manda el PIN (si es coordinador) y la clave del área abierta (si es referente).
+// Va como text/plain para evitar problemas de CORS con Apps Script.
+async function api(accion, extra = {}) {
+  const r = await fetch(API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ accion, pin, clave: claves[areaActiva] || '', ...extra })
+  });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error);
+  return j;
+}
+
+async function ejecutar(fn) {
+  try { await fn(); await cargar(); }
+  catch (err) { alert(err.message); }
+}
+
+/* ---------- utilidades ---------- */
+
+const diaInfo = id => DIAS.find(d => d.id === id);
+
+// El coordinador o el referente de esta área pueden gestionarla
+const puedeGestionar = areaId => esAdmin || !!claves[areaId];
+
+function colaboradoresDe(areaId) {
+  return datos.colaboradores.filter(c => c.areaId === areaId);
+}
+
+// "2293 555555" o "02293-15 555555" -> 549 + área + número (formato wa.me)
+function numeroWA(tel) {
+  let d = String(tel).replace(/\D/g, '');
+  if (d.startsWith('0')) d = d.slice(1);
+  if (d.startsWith('54')) {
+    if (!d.startsWith('549')) d = '549' + d.slice(2);
+  } else {
+    d = '549' + d;
+  }
+  return d;
+}
+
+function linkWA(tel, texto) {
+  return `https://wa.me/${numeroWA(tel)}?text=${encodeURIComponent(texto)}`;
+}
+
+/* ---------- acciones ---------- */
+
+function abrirArea(id) { areaActiva = id; render(); window.scrollTo(0, 0); }
+function volver() { areaActiva = null; render(); }
+
+// Al cambiar el día, ajustamos los horarios a la franja de ese día
+function cambiarDia(sel) {
+  const d = diaInfo(sel.value);
+  const f = sel.form;
+  f.desde.min = d.desde; f.desde.max = d.hasta; f.desde.value = d.desde;
+  f.hasta.min = d.desde; f.hasta.max = d.hasta; f.hasta.value = d.hasta;
+}
+
+function anotarEnArea(e) {
+  e.preventDefault();
+  const f = e.target;
+  ejecutar(() => api('anotar', {
+    areaId: areaActiva,
+    nombre: f.nombre.value.trim(),
+    tel: f.tel.value.trim(),
+    dia: f.dia.value,
+    desde: f.desde.value,
+    hasta: f.hasta.value
+  }));
+}
+
+// Coordinador o referente: quita a cualquiera del área. Papá: se da de baja a sí mismo.
+function quitar(id) {
+  const c = datos.colaboradores.find(x => x.id === id);
+  if (!c) return;
+  const gestiona = puedeGestionar(c.areaId);
+  const msg = gestiona ? `¿Quitar a ${c.nombre} de esta área?` : `¿Darte de baja, ${c.nombre}?`;
+  if (!confirm(msg)) return;
+  ejecutar(() => api(gestiona ? 'quitarColaborador' : 'baja', { id }));
+}
+
+// Referente: desbloquea la gestión de su área con la clave que le dio el coordinador
+async function soyReferente() {
+  const c = prompt('Clave del referente de esta área:');
+  if (!c) return;
+  const clave = c.trim().toUpperCase();
+  try {
+    await api('verificarClave', { areaId: areaActiva, clave });
+    claves[areaActiva] = clave;
+    render();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function editarArea(e, areaId) {
+  e.preventDefault();
+  const f = e.target;
+  const a = datos.areas.find(x => x.id === areaId);
+  ejecutar(() => api('editarArea', {
+    areaId,
+    emoji: f.emoji.value.trim() || '📍',
+    nombre: f.nombre.value.trim(),
+    referenteNombre: f.referenteNombre.value.trim(),
+    referenteTel: f.referenteTel.value.trim()
+  }));
+}
+
+// Coordinador: crea un área y muestra la clave para el referente
+async function agregarArea(e) {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    const r = await api('crearArea', {
+      emoji: f.emoji.value.trim() || '📍',
+      nombre: f.nombre.value.trim(),
+      referenteNombre: f.referenteNombre.value.trim(),
+      referenteTel: f.referenteTel.value.trim()
+    });
+    alert(`Área creada.\n\nClave del referente: ${r.clave}\n\nDásela al referente para que pueda gestionar su área.`);
+    await cargar();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+// Coordinador: muestra la clave de un área ya creada
+async function verClave(areaId) {
+  try {
+    const r = await api('verClave', { areaId });
+    alert(`Clave del referente: ${r.clave}`);
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function borrarArea(id) {
+  if (!confirm('¿Borrar esta área y todos sus colaboradores anotados?')) return;
+  areaActiva = null;
+  ejecutar(() => api('borrarArea', { areaId: id }));
+}
+
+async function toggleAdmin() {
+  if (esAdmin) { esAdmin = false; pin = ''; return render(); }
+  const p = prompt('PIN de coordinación:');
+  if (p === null) return;
+  pin = p;
+  try {
+    await api('verificarPin');
+    esAdmin = true;
+    render();
+  } catch (err) {
+    pin = '';
+    alert(err.message);
+  }
+}
+
+/* ---------- vistas ---------- */
+
+// Pantalla principal: cuadros con emoji y referente
+function vistaGrilla() {
+  const admin = esAdmin ? `
+    <section class="card">
+      <h2>Nueva área</h2>
+      <form class="fila" onsubmit="agregarArea(event)">
+        <input name="emoji" placeholder="Emoji (ej: 🏀)" style="max-width:130px">
+        <input name="nombre" placeholder="Nombre del área" required>
+        <input name="referenteNombre" placeholder="Nombre del referente" required>
+        <input name="referenteTel" type="tel" placeholder="Teléfono del referente" required>
+        <button class="primario">Agregar</button>
+      </form>
+    </section>` : '';
+
+  const cuadros = datos.areas.map(a => `
+    <button class="cuadro" onclick="abrirArea('${a.id}')">
+      <span class="emo">${esc(a.emoji)}</span>
+      <strong>${esc(a.nombre)}</strong>
+      <span class="ref">Referente: ${esc(a.referenteNombre)}</span>
+      <span class="cuenta">${colaboradoresDe(a.id).length} anotados</span>
+    </button>`).join('');
+
+  return admin + (datos.areas.length
+    ? `<div class="grilla">${cuadros}</div>`
+    : '<div class="vacio">Todavía no hay áreas cargadas.</div>');
+}
+
+// Pantalla de un área: referente arriba, colaboradores con su horario abajo
+function vistaArea(a) {
+  const cols = colaboradoresDe(a.id);
+  const gestiona = puedeGestionar(a.id);
+  const msgRef = `Hola ${a.referenteNombre}! Te escribo por la agenda del Encuentro, área ${a.nombre}.`;
+
+  const bloques = DIAS.map(d => {
+    const items = cols
+      .filter(c => c.dia === d.id)
+      .sort((x, y) => x.desde.localeCompare(y.desde));
+    const lista = items.length
+      ? items.map(c => `
+          <div class="fila-col">
+            <span><span class="horario">${esc(c.desde)} a ${esc(c.hasta)}</span> · ${esc(c.nombre)}</span>
+            <span class="acciones">
+              <a class="wa" target="_blank" rel="noopener"
+                 href="${esc(linkWA(c.tel, `Hola ${c.nombre}! Te escribo por la agenda del Encuentro: ${a.nombre}, ${d.label} de ${c.desde} a ${c.hasta}.`))}">WhatsApp</a>
+              <button class="peligro" onclick="quitar('${c.id}')">${gestiona ? 'Quitar' : 'Darme de baja'}</button>
+            </span>
+          </div>`).join('')
+      : `<p class="muted">Nadie anotado todavía.</p>`;
+    return `<h3>${d.label} · ${d.desde} a ${d.hasta}</h3>${lista}`;
+  }).join('');
+
+  const formAnotar = `
+    <div class="anotar">
+      <strong>Anotarme en esta área</strong>
+      <form class="fila" onsubmit="anotarEnArea(event)">
+        <input name="nombre" placeholder="Nombre y apellido" required>
+        <input name="tel" type="tel" placeholder="Teléfono (con código de área)" required>
+        <select name="dia" onchange="cambiarDia(this)">
+          ${DIAS.map(d => `<option value="${d.id}">${d.label}</option>`).join('')}
+        </select>
+        <input name="desde" type="time" value="${DIAS[0].desde}" min="${DIAS[0].desde}" max="${DIAS[0].hasta}" required>
+        <input name="hasta" type="time" value="${DIAS[0].hasta}" min="${DIAS[0].desde}" max="${DIAS[0].hasta}" required>
+        <button class="primario">Anotarme</button>
+      </form>
+    </div>`;
+
+  // Acciones de gestión: visibles para el coordinador o el referente desbloqueado
+  let gestion = '';
+  if (gestiona) {
+    gestion = `
+      <div class="gestion">
+        <strong>Gestión del área</strong>
+        <form class="fila" onsubmit="editarArea(event,'${a.id}')">
+          <input name="emoji" value="${esc(a.emoji)}" style="max-width:90px">
+          <input name="nombre" value="${esc(a.nombre)}" required>
+          <input name="referenteNombre" value="${esc(a.referenteNombre)}" placeholder="Referente" required>
+          <input name="referenteTel" type="tel" value="${esc(a.referenteTel)}" placeholder="Teléfono del referente" required>
+          <button class="secundario">Guardar cambios</button>
+        </form>
+        ${esAdmin ? `
+          <div class="acciones" style="margin-top:12px">
+            <button class="secundario" onclick="verClave('${a.id}')">Ver clave del referente</button>
+            <button class="peligro" onclick="borrarArea('${a.id}')">Borrar área</button>
+          </div>` : ''}
+      </div>`;
+  }
+
+  const botonReferente = !gestiona
+    ? `<div class="acciones" style="margin-top:14px"><button class="secundario" onclick="soyReferente()">Soy el referente de esta área</button></div>`
+    : '';
+
+  return `
+    <button class="volver" onclick="volver()">← Todas las áreas</button>
+    <section class="card">
+      <h2>${esc(a.emoji)} ${esc(a.nombre)}</h2>
+      <div class="referente">
+        <div><span class="muted">Referente</span><br><strong>${esc(a.referenteNombre)}</strong></div>
+        <a class="wa" target="_blank" rel="noopener" href="${esc(linkWA(a.referenteTel, msgRef))}">WhatsApp al referente</a>
+      </div>
+      ${bloques}
+      ${formAnotar}
+      ${gestion}
+      ${botonReferente}
+    </section>`;
+}
+
+function render() {
+  document.getElementById('btnAdmin').textContent = esAdmin ? 'Salir del modo coordinador' : 'Modo coordinador';
+  document.getElementById('btnAdmin').classList.toggle('activo', esAdmin);
+
+  const area = datos.areas.find(a => a.id === areaActiva);
+  if (areaActiva && !area) areaActiva = null;
+  document.getElementById('titulo').textContent = area ? area.nombre : 'Áreas';
+
+  let html = area ? vistaArea(area) : vistaGrilla();
+  document.getElementById('main').innerHTML = html;
+}
+
+cargar().catch(err => {
+  document.getElementById('main').innerHTML = `<div class="vacio">No se pudieron cargar las áreas. ${esc(err.message)}</div>`;
+});
+</script>
+</body>
+</html>
