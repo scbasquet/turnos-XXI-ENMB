@@ -157,6 +157,18 @@ function volver() { areaActiva = null; render(); }
 
 const estaCancelado = (areaId, dia) => (datos.cancelados || []).some(x => x.areaId === areaId && x.dia === dia);
 
+const cupoDe = (areaId, dia) => {
+  const f = (datos.cupos || []).find(x => x.areaId === areaId && x.dia === dia);
+  return f ? f.cupo : CUPO;
+};
+
+// Coordinador o referente: cambia cuántos colaboradores se necesitan por horario en ese día
+function guardarCupo(e, areaId, dia) {
+  e.preventDefault();
+  const n = e.target.cupo.value;
+  ejecutar(() => api('setCupo', { areaId, dia, cupo: n }));
+}
+
 // Coordinador o referente: cancela o reactiva el turno de un día en el área
 function cambiarCancelacion(areaId, dia, cancelar) {
   const d = diaInfo(dia);
@@ -325,6 +337,7 @@ function agendaDia(a, d, cols, gestiona) {
     </div>`;
   }
 
+  const cupo = cupoDe(a.id, d.id);
   const ini = aMin(d.desde), fin = aMin(d.hasta);
   const delDia = cols
     .filter(c => c.dia === d.id)
@@ -344,9 +357,9 @@ function agendaDia(a, d, cols, gestiona) {
 
   const filas = grupos.map(g => {
     const rango = `${hhmm(g.desde)} a ${hhmm(g.hasta)}`;
-    const faltan = CUPO - g.ids.length;
+    const faltan = cupo - g.ids.length;
     if (!g.ids.length) {
-      return `<div class="franja falta"><span class="hora">${rango}</span><div><div class="estado faltan">Faltan ${CUPO} colaboradores</div></div></div>`;
+      return `<div class="franja falta"><span class="hora">${rango}</span><div><div class="estado faltan">Faltan ${cupo} colaboradores</div></div></div>`;
     }
     const personas = delDia
       .filter(c => g.ids.includes(c.id))
@@ -354,16 +367,21 @@ function agendaDia(a, d, cols, gestiona) {
       .map(c => chipPersona(c, a, d, gestiona))
       .join('');
     const estado = faltan > 0
-      ? `<div class="estado faltan">Faltan ${faltan} de ${CUPO}</div>`
-      : `<div class="estado completo">Completo: ${CUPO} de ${CUPO}</div>`;
+      ? `<div class="estado faltan">Faltan ${faltan} de ${cupo}</div>`
+      : `<div class="estado completo">Completo: ${cupo} de ${cupo}</div>`;
     return `<div class="franja ${faltan > 0 ? 'parcial' : ''}"><span class="hora">${rango}</span><div>${estado}<div class="personas">${personas}</div></div></div>`;
   }).join('');
 
   return `
     <div class="dia">
-      <div class="dia-titulo"><strong>${d.label}</strong><span>Cubrir de ${d.desde} a ${d.hasta} · ${CUPO} por horario</span></div>
+      <div class="dia-titulo"><strong>${d.label}</strong><span>Cubrir de ${d.desde} a ${d.hasta} · ${cupo} por horario</span></div>
       ${filas}
-      ${gestiona ? `<div class="acciones" style="margin:8px 0"><button class="peligro" onclick="cambiarCancelacion('${a.id}','${d.id}',true)">Cancelar turno del ${d.label.toLowerCase()}</button></div>` : ''}
+      ${gestiona ? `<div class="acciones" style="margin:8px 0"><button class="peligro" onclick="cambiarCancelacion('${a.id}','${d.id}',true)">Cancelar turno del ${d.label.toLowerCase()}</button></div>
+      <form class="fila" style="align-items:center" onsubmit="guardarCupo(event,'${a.id}','${d.id}')">
+        <span class="muted">Colaboradores por horario:</span>
+        <input name="cupo" type="number" min="1" max="50" value="${cupo}" style="max-width:90px;flex:0">
+        <button class="secundario">Guardar</button>
+      </form>` : ''}
     </div>`;
 }
 
@@ -380,7 +398,7 @@ function vistaArea(a) {
   const formAnotar = `
     <div class="anotar">
       <strong>Anotarme en esta área</strong>
-      <p class="muted">Cada horario necesita ${CUPO} colaboradores. Si ya está completo, elegí otra franja.</p>
+      <p class="muted">Si un horario ya está completo, elegí otra franja.</p>
       <form class="fila" onsubmit="anotarEnArea(event)">
         <input name="nombre" placeholder="Nombre y apellido" required>
         <input name="tel" type="tel" placeholder="Teléfono (con código de área)" required>
