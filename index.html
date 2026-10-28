@@ -55,6 +55,10 @@ input,select{padding:9px;border:1px solid #bbb;border-radius:8px;font-size:1rem;
 .personas{display:flex;flex-wrap:wrap;gap:8px}
 .persona{display:flex;align-items:center;gap:6px;background:#fafafa;border:1px solid #ddd;border-radius:10px;padding:4px 6px 4px 10px}
 .persona .nombre{font-weight:600}
+.estado{font-size:.85rem;font-weight:700;margin-bottom:6px}
+.estado.faltan{color:var(--rojo)}
+.estado.completo{color:#1e8e3e}
+.franja.parcial{background:#fffaf0}
 </style>
 </head>
 <body>
@@ -78,6 +82,9 @@ const DIAS = [
   { id: 'sabado',  label: 'Sábado',  desde: '08:30', hasta: '18:30' },
   { id: 'domingo', label: 'Domingo', desde: '08:30', hasta: '14:00' }
 ];
+
+// Colaboradores necesarios en simultáneo en cada franja (debe coincidir con CUPO en Code.gs)
+const CUPO = 5;
 
 let datos = { areas: [], colaboradores: [] };
 let areaActiva = null;   // id del área abierta, o null para la grilla
@@ -147,6 +154,18 @@ function linkWA(tel, texto) {
 
 function abrirArea(id) { areaActiva = id; render(); window.scrollTo(0, 0); }
 function volver() { areaActiva = null; render(); }
+
+const estaCancelado = (areaId, dia) => (datos.cancelados || []).some(x => x.areaId === areaId && x.dia === dia);
+
+// Coordinador o referente: cancela o reactiva el turno de un día en el área
+function cambiarCancelacion(areaId, dia, cancelar) {
+  const d = diaInfo(dia);
+  const msg = cancelar
+    ? `¿Cancelar el turno del ${d.label.toLowerCase()} en esta área? Se oculta de la agenda y no se puede anotar.`
+    : `¿Reactivar el turno del ${d.label.toLowerCase()} en esta área?`;
+  if (!confirm(msg)) return;
+  ejecutar(() => api(cancelar ? 'cancelarDia' : 'reactivarDia', { areaId, dia }));
+}
 
 // Al cambiar el día, ajustamos los horarios a la franja de ese día
 function cambiarDia(sel) {
@@ -297,6 +316,15 @@ function chipPersona(c, a, d, gestiona) {
 // Agenda de un día: se recorre en franjas de 30 minutos y se agrupan las franjas
 // consecutivas que tienen la misma gente, así cada fila muestra un rango de horas.
 function agendaDia(a, d, cols, gestiona) {
+  if (estaCancelado(a.id, d.id)) {
+    return `
+    <div class="dia">
+      <div class="dia-titulo"><strong>${d.label}</strong><span>Turno cancelado</span></div>
+      <p class="muted" style="padding:10px 8px">No hay turno este día en esta área.</p>
+      ${gestiona ? `<div class="acciones" style="margin:4px 0 8px"><button class="secundario" onclick="cambiarCancelacion('${a.id}','${d.id}',false)">Reactivar ${d.label.toLowerCase()}</button></div>` : ''}
+    </div>`;
+  }
+
   const ini = aMin(d.desde), fin = aMin(d.hasta);
   const delDia = cols
     .filter(c => c.dia === d.id)
@@ -316,21 +344,26 @@ function agendaDia(a, d, cols, gestiona) {
 
   const filas = grupos.map(g => {
     const rango = `${hhmm(g.desde)} a ${hhmm(g.hasta)}`;
+    const faltan = CUPO - g.ids.length;
     if (!g.ids.length) {
-      return `<div class="franja falta"><span class="hora">${rango}</span><span>Falta cubrir</span></div>`;
+      return `<div class="franja falta"><span class="hora">${rango}</span><div><div class="estado faltan">Faltan ${CUPO} colaboradores</div></div></div>`;
     }
     const personas = delDia
       .filter(c => g.ids.includes(c.id))
       .sort((x, y) => x.nombre.localeCompare(y.nombre))
       .map(c => chipPersona(c, a, d, gestiona))
       .join('');
-    return `<div class="franja"><span class="hora">${rango}</span><div class="personas">${personas}</div></div>`;
+    const estado = faltan > 0
+      ? `<div class="estado faltan">Faltan ${faltan} de ${CUPO}</div>`
+      : `<div class="estado completo">Completo: ${CUPO} de ${CUPO}</div>`;
+    return `<div class="franja ${faltan > 0 ? 'parcial' : ''}"><span class="hora">${rango}</span><div>${estado}<div class="personas">${personas}</div></div></div>`;
   }).join('');
 
   return `
     <div class="dia">
-      <div class="dia-titulo"><strong>${d.label}</strong><span>Cubrir de ${d.desde} a ${d.hasta}</span></div>
+      <div class="dia-titulo"><strong>${d.label}</strong><span>Cubrir de ${d.desde} a ${d.hasta} · ${CUPO} por horario</span></div>
       ${filas}
+      ${gestiona ? `<div class="acciones" style="margin:8px 0"><button class="peligro" onclick="cambiarCancelacion('${a.id}','${d.id}',true)">Cancelar turno del ${d.label.toLowerCase()}</button></div>` : ''}
     </div>`;
 }
 
@@ -347,6 +380,7 @@ function vistaArea(a) {
   const formAnotar = `
     <div class="anotar">
       <strong>Anotarme en esta área</strong>
+      <p class="muted">Cada horario necesita ${CUPO} colaboradores. Si ya está completo, elegí otra franja.</p>
       <form class="fila" onsubmit="anotarEnArea(event)">
         <input name="nombre" placeholder="Nombre y apellido" required>
         <input name="tel" type="tel" placeholder="Teléfono (con código de área)" required>
